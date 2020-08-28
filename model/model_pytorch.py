@@ -14,15 +14,15 @@ class Net(Module):
                          #pytorch rnn 参数顺序默认(seq_len, batch_size, input_size)，设置batch_first=True 变为batch seqlen inputsize
         self.fc1 = Linear(in_features=config.hidden_size, out_features=64)
         self.fc2 = Linear(in_features=64, out_features=3)
-        #self.relu=Linear()
 
     def forward(self, x, hidden=None):
         x=x.permute(1,0,2)
         lstm_out, hidden = self.lstm(x, hidden)
         lstm_out=lstm_out[-1,:,:]
-        x=F.relu(self.fc1(lstm_out))
-        x=F.relu(self.fc2(x))
-        #x=F.softmax(x,dim=2)
+        #全连接层没有加relu，实验发现加了以后可能正则化太强输出大部分是不涨不跌
+        x=(self.fc1(lstm_out))
+        x=(self.fc2(x))
+        #x=F.softmax(x,dim=2) #后面使用交叉熵损失函数会自动softmax
         
         return x
 
@@ -59,7 +59,7 @@ def train(config, logger, train_and_valid_data):
             _train_X, _train_Y = _data[0].to(device),_data[1].to(device)
             pred_Y = model(_train_X, hidden_train)   
             
-            # 交叉熵的几个坑 1. target必须是long类型，2. target不能有多余的为1的维度
+            # 交叉熵需要注意 1. target必须是long类型，2. target不能有多余的为1的维度
             # 3. target不是one hot类型，而是列别编码，且为0到c-1
 
             loss = criterion(pred_Y, _train_Y)  # 计算loss
@@ -128,7 +128,7 @@ def predict(config, test_X):
     for _data in test_loader:
         data_X = _data[0].to(device)
         pred_Y = model(data_X, hidden_predict)
-        # if not config.do_continue_train: hidden_predict = None    # 实验发现无论是否是连续训练模式，把上一个time_step的hidden传入下一个效果都更好
+        
         result = torch.cat((result, pred_Y), dim=0)
 
     return result.detach().cpu().numpy()    # 先去梯度信息，如果在gpu要转到cpu，最后要返回numpy数据

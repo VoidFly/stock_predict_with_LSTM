@@ -8,20 +8,20 @@ import time
 import logging
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-
 frame = "pytorch"
 from model.model_pytorch import train, predict
 
 
 class Config:
     # 数据参数
-    feature_columns = list(range(1, 5))     # 要作为feature的列,index列不算，第一列数据为第0列
-    label_columns = [0]                  # 要预测的列
+    #feature_columns = list(range(1, 5))     # 要作为feature的列,index列不算，第一列数据为第0列
+    feature_columns=[1,2,3,5,6]
+    label_columns = [4]                  # 要预测的列 close
 
     up_threshold=0.05
-    down_threshold=-0.02
+    down_threshold=-0.05
 
-    predict_day = 1             # 预测未来几天
+    predict_day = 10             # 预测未来几天
 
     # 网络参数
     input_size = len(feature_columns)
@@ -30,8 +30,8 @@ class Config:
 
     hidden_size = 128           # LSTM的隐藏层大小，也是输出大小
     lstm_layers = 2             # LSTM的堆叠层数
-    dropout_rate = 0.2          # dropout概率
-    time_step = 20              # 用前多少天的数据来预测，也是LSTM的time step数
+    dropout_rate = 0          # dropout概率
+    time_step = 40              # 用前多少天的数据来预测，也是LSTM的time step数
 
     # 训练参数
     do_train = True
@@ -41,40 +41,30 @@ class Config:
     shuffle_train_data = True   # 是否对训练数据做shuffle
     use_cuda = True            # 是否使用GPU训练
 
-    train_data_rate = 0.99      # 训练数据占总体数据比例，测试数据就是 1-train_data_rate
-    valid_data_rate = 0.01      # 验证数据占训练数据比例，验证集在训练过程使用，为了做模型和参数选择
+    train_data_rate = 0.9      # 训练数据占总体数据比例，测试数据就是 1-train_data_rate
+    valid_data_rate = 0.1      # 验证数据占训练数据比例，验证集在训练过程使用，为了做模型和参数选择
 
     batch_size = 64
     learning_rate = 0.001
     epoch = 5                  # 整个训练集被训练多少遍，不考虑早停的前提下
     patience = 5                # 训练多少epoch，验证集没提升就停掉
-    random_seed = 42            # 随机种子，保证可复现
+    random_seed = 42           
 
-    do_continue_train = False    # 每次训练把上一次的final_state作为下一次的init_state，仅用于RNN类型模型
-    continue_flag = ""           # 但实际效果不佳，可能原因：仅能以 batch_size = 1 训练
+    debug_mode = False
+    debug_num = 1000  
 
-    if do_continue_train:
-        shuffle_train_data = False
-        batch_size = 1
-        continue_flag = "continue_"
-
-    # 训练模式
-    debug_mode = False  # 调试模式下，是为了跑通代码，追求快
-    debug_num = 1000  # 仅用debug_num条数据来调试
-
-    # 框架参数
     used_frame = frame
     model_postfix = {"pytorch": ".pth"}
     model_name = "model_" + continue_flag + used_frame + model_postfix[used_frame]
 
     # 路径参数
-    train_data_path = "./data/hs300_processed.csv"
+    train_data_path = "./data/choice_hs300.csv"
     model_save_path = "./checkpoint/" + used_frame + "/"
     figure_save_path = "./figure/"
     log_save_path = "./log/"
     do_log_save = True                  # 是否将config和训练过程记录到log
     do_figure_save = False
-    do_train_visualized = False        # 训练loss可视化，pytorch采用visdom
+    do_train_visualized = False        # 训练loss可视化,采用visdom
 
     if not os.path.exists(model_save_path):
         os.makedirs(model_save_path)    # makedirs 递归创建目录
@@ -94,27 +84,15 @@ class Data:
         self.data_num = self.x_data.shape[0]
         self.train_num = int(self.data_num * self.config.train_data_rate)
 
-        # self.mean = np.mean(self.x_data, axis=0)
-        # self.std = np.std(self.x_data, axis=0)
-        # self.norm_data = (self.x_data - self.mean)/self.std   # 归一化，去量纲
-
-        #self.mean_y = np.mean(self.y_data, axis=0)
-        #self.std_y = np.std(self.y_data, axis=0)
-        #self.y_data = (self.y_data - self.mean_y)/self.std_y   # 归一化，去量纲
-
-
         self.start_num_in_test = 0      # 测试集中前几天的数据会被删掉，因为它不够一个time_step
     
-    # def mean_std(self):
-    #     return self.mean,self.std
-
-    def read_data(self):                # 读取初始数据
+    def read_data(self):
         if self.config.debug_mode:
             init_data = pd.read_csv(self.config.train_data_path,
-                                    nrows=self.config.debug_num,index_col=0)
+                                    nrows=self.config.debug_num)
         else:
-            init_data = pd.read_csv(self.config.train_data_path,index_col=0)
-        
+            init_data = pd.read_csv(self.config.train_data_path)
+
         return init_data.iloc[:,self.config.feature_columns].to_numpy(), init_data.columns.tolist(), init_data.iloc[:,self.config.label_columns].to_numpy()
 
     def categorize(self, x):
@@ -124,6 +102,11 @@ class Data:
             return 0
         else :
             return 1
+    def standardize(self,x):
+        mean_x = np.mean(x, axis=0)
+        std_x = np.std(x, axis=0)
+        return  (x - mean_x)/std_x
+        #return (x-np.min(x,axis=0))/(np.max(x,axis=0)-np.min(x,axis=0))
 
 
     def get_train_and_valid_data(self):
@@ -133,30 +116,24 @@ class Data:
         rolling_win=[]
         train_x=[]
         train_y=[]
-        if not self.config.do_continue_train:
-            # 在非连续训练模式下，每time_step行数据会作为一个样本，两个样本错开一行，比如：1-20行，2-21行。。。。
-            #train_x = [feature_data[i:i+self.config.time_step] for i in range(self.train_num-self.config.time_step)]
-            #train_y = [label_data[i:i+self.config.time_step] for i in range(self.train_num-self.config.time_step)]
-            for i in range(self.train_num):
-                rolling_win.append(feature_data[i])
-                if len(rolling_win)==self.config.time_step:
-                    train_x.append(rolling_win)
-                    rolling_win=rolling_win[1:]
-                    train_y.append((label_data[i+self.config.predict_day]-label_data[i])/label_data[i])
-        else:
-            raise('not implemented')
+    
+        for i in range(self.train_num):
+            rolling_win.append(feature_data[i])
+            if len(rolling_win)==self.config.time_step:
+                train_x.append(rolling_win)
+                rolling_win=rolling_win[1:]
+                train_y.append((label_data[i+self.config.predict_day]-label_data[i])/label_data[i])
 
+
+        train_x1=[]
         train_x, train_y = np.array(train_x), np.array(train_y)
+        for i in train_x.tolist():
+            i=np.array(i)
+            i=self.standardize(i)
+            train_x1.append(i)
+
+        train_x=np.array(train_x1)
         
-        mean_x = np.mean(train_x, axis=0)
-        std_x = np.std(train_x, axis=0)
-        train_x = (train_x - mean_x)/std_x
-
-        mean_y = np.mean(train_y, axis=0)
-        std_y = np.std(train_y, axis=0)
-        train_y = (train_y - mean_y)/std_y
-        #离散分类化
-
         train_y=np.array([list(map(self.categorize,i)) for i in train_y.tolist()])
 
         train_x, valid_x, train_y, valid_y = train_test_split(train_x, train_y, test_size=self.config.valid_data_rate,
@@ -180,13 +157,15 @@ class Data:
                 rolling_win=rolling_win[1:]
                 valid_y.append((label_data[i+self.config.predict_day]-label_data[i])/label_data[i])
             
-        mean_x = np.mean(valid_x, axis=0)
-        std_x = np.std(valid_x, axis=0)
-        valid_x = (valid_x - mean_x)/std_x
+        valid_x1=[]
+        valid_x, valid_y = np.array(valid_x), np.array(valid_y)
+        for i in valid_x.tolist():
+            i=np.array(i)
+            i=self.standardize(i)
+            valid_x1.append(i)
 
-        mean_y = np.mean(valid_y, axis=0)
-        std_y = np.std(valid_y, axis=0)
-        valid_y = (valid_y - mean_y)/std_y
+        valid_x=np.array(valid_x1)
+        
         valid_y=np.array([list(map(self.categorize,i)) for i in valid_y.tolist()])
 
         return np.array(valid_x),np.array(valid_y)
@@ -231,11 +210,9 @@ def draw(config: Config, origin_data: Data, logger, predict_data: np.ndarray, la
     plt.figure(1)                     # 预测数据绘制
     plt.plot(range(len(label_data)), label_data, label='label')
     plt.plot(range(len(predict_data)), predict_data, label='predict')
-    #plt.title("Predict stock {} price with {}".format(label_name[i], config.used_frame))
+    #plt.title()
     plt.legend(loc='upper left')
 
-    # logger.info("The predicted stock {} for the next {} day(s) is: ".format(label_name[i], config.predict_day) +
-    #         str(np.squeeze(predict_data[-config.predict_day:, i])))
     if config.do_figure_save:
         plt.savefig(config.figure_save_path+"{}predict_{}_with_{}.png".format(config.continue_flag, label_name[i], config.used_frame))
 
@@ -256,8 +233,7 @@ def main(config):
             pred_result = predict(config, test_X)
 
             pred_result=[np.argwhere(i==max(i))  for i in pred_result]
-           
-
+        
             draw(config, data_gainer, logger, pred_result, test_Y)
     except Exception:
         logger.error("Run Error", exc_info=True)
