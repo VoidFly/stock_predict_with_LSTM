@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+#author 李瑶函
 import torch
 from torch.nn import Module, LSTM, Linear
 from torch.utils.data import DataLoader, TensorDataset

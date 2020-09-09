@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# @ lyh
+# author 李瑶函
 import pandas as pd
 import numpy as np
 import os
@@ -30,12 +30,15 @@ class Config:
 
     hidden_size = 128           # LSTM的隐藏层大小，也是输出大小
     lstm_layers = 2             # LSTM的堆叠层数
-    dropout_rate = 0          # dropout概率
+    dropout_rate = 0.2          # dropout概率
     time_step = 40              # 用前多少天的数据来预测，也是LSTM的time step数
 
     # 训练参数
-    do_train = True
+    do_train = False
     do_predict = True
+
+    #针对全数据预测
+    do_predict_all=True
 
     add_train = False           # 是否载入已有模型参数进行增量训练
     shuffle_train_data = True   # 是否对训练数据做shuffle
@@ -44,10 +47,13 @@ class Config:
     train_data_rate = 0.9      # 训练数据占总体数据比例，测试数据就是 1-train_data_rate
     valid_data_rate = 0.1      # 验证数据占训练数据比例，验证集在训练过程使用，为了做模型和参数选择
 
+    predict_begin_rate=0        #设定哪些数据用于做最后的预测输出
+    predict_end_rate=1
+
     batch_size = 64
     learning_rate = 0.001
-    epoch = 5                  # 整个训练集被训练多少遍，不考虑早停的前提下
-    patience = 5                # 训练多少epoch，验证集没提升就停掉
+    epoch = 5                 # 整个训练集被训练多少遍，不考虑早停的前提下
+    patience = 10                # 训练多少epoch，验证集没提升就停掉
     random_seed = 42           
 
     debug_mode = False
@@ -55,13 +61,15 @@ class Config:
 
     used_frame = frame
     model_postfix = {"pytorch": ".pth"}
-    model_name = "model_" + continue_flag + used_frame + model_postfix[used_frame]
+    model_name = "model_"  + used_frame + model_postfix[used_frame]
 
     # 路径参数
     train_data_path = "./data/choice_hs300.csv"
     model_save_path = "./checkpoint/" + used_frame + "/"
     figure_save_path = "./figure/"
     log_save_path = "./log/"
+    predict_file_save_path='./predict_data/'
+
     do_log_save = True                  # 是否将config和训练过程记录到log
     do_figure_save = False
     do_train_visualized = False        # 训练loss可视化,采用visdom
@@ -79,7 +87,7 @@ class Config:
 class Data:
     def __init__(self, config):
         self.config = config
-        self.x_data, self.data_column_name,self.y_data = self.read_data()
+        self.x_data, self.data_column_name,self.y_data,self.date = self.read_data()
         
         self.data_num = self.x_data.shape[0]
         self.train_num = int(self.data_num * self.config.train_data_rate)
@@ -93,7 +101,7 @@ class Data:
         else:
             init_data = pd.read_csv(self.config.train_data_path)
 
-        return init_data.iloc[:,self.config.feature_columns].to_numpy(), init_data.columns.tolist(), init_data.iloc[:,self.config.label_columns].to_numpy()
+        return init_data.iloc[:,self.config.feature_columns].to_numpy(), init_data.columns.tolist(), init_data.iloc[:,self.config.label_columns].to_numpy(), init_data.date.to_numpy()
 
     def categorize(self, x):
         if x>self.config.up_threshold:
@@ -143,22 +151,33 @@ class Data:
 
 
     
-    def get_test_data(self, return_label_data=False):
-        feature_data = self.x_data[self.train_num:]
-        label_data=self.y_data[self.train_num:]
+    def get_test_data(self, return_label_data=False,predict_all=False):
+        if predict_all:
+            feature_data = self.x_data[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
+            label_data=self.y_data[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
+            date=self.date[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
+        else:
+            feature_data = self.x_data[self.train_num:]
+            label_data=self.y_data[self.train_num:]
+            date=self.date[self.train_num:]
 
         rolling_win=[]
         valid_x=[]
         valid_y=[]
+        valid_date=[]
         for i in range(len(feature_data)-self.config.predict_day):
             rolling_win.append(feature_data[i])
             if len(rolling_win)==self.config.time_step: 
                 valid_x.append(rolling_win)
                 rolling_win=rolling_win[1:]
                 valid_y.append((label_data[i+self.config.predict_day]-label_data[i])/label_data[i])
-            
+                valid_date.append(date[i+self.config.predict_day])
+
         valid_x1=[]
         valid_x, valid_y = np.array(valid_x), np.array(valid_y)
+        valid_date=np.array(valid_date)
+
+        #标准化
         for i in valid_x.tolist():
             i=np.array(i)
             i=self.standardize(i)
@@ -166,9 +185,12 @@ class Data:
 
         valid_x=np.array(valid_x1)
         
-        valid_y=np.array([list(map(self.categorize,i)) for i in valid_y.tolist()])
-
-        return np.array(valid_x),np.array(valid_y)
+        if return_label_data:
+            #离散化分类
+            valid_y=np.array([list(map(self.categorize,i)) for i in valid_y.tolist()])
+            return np.array(valid_x),np.array(valid_y),valid_date
+        else:
+            return np.array(valid_x),valid_date
 
 def load_logger(config):
     logger = logging.getLogger()
@@ -202,21 +224,26 @@ def load_logger(config):
 
     return logger
 
-def draw(config: Config, origin_data: Data, logger, predict_data: np.ndarray, label_data):
-    
-    predict_data=[i[0][0] for i in predict_data]
-    label_data=[i[0] for i in label_data]
+def draw(config: Config, origin_data: Data, logger, predict_data: np.ndarray, label_data,date):
 
     plt.figure(1)                     # 预测数据绘制
     plt.plot(range(len(label_data)), label_data, label='label')
     plt.plot(range(len(predict_data)), predict_data, label='predict')
-    #plt.title()
+    plt.title('up&down signals')
     plt.legend(loc='upper left')
 
     if config.do_figure_save:
         plt.savefig(config.figure_save_path+"{}predict_{}_with_{}.png".format(config.continue_flag, label_name[i], config.used_frame))
 
     plt.show()  
+
+def save_predict(config:Config,predict_data: np.ndarray, date):
+
+    df=pd.DataFrame(list(zip(date,predict_data)))
+    df.columns=['date','predict']
+    df.to_csv(config.predict_file_save_path+'predict_data'+'.csv')
+    print('predict result saved')
+    
 
 def main(config):
     logger = load_logger(config)
@@ -229,15 +256,23 @@ def main(config):
             train(config, logger, [train_X, train_Y, valid_X, valid_Y])
 
         if config.do_predict:
-            test_X, test_Y = data_gainer.get_test_data(return_label_data=True)
+            test_X, test_Y,test_date = data_gainer.get_test_data(return_label_data=True)
             pred_result = predict(config, test_X)
-
             pred_result=[np.argwhere(i==max(i))  for i in pred_result]
-        
-            draw(config, data_gainer, logger, pred_result, test_Y)
+            pred_result=np.squeeze(pred_result)
+            test_Y=np.squeeze(test_Y)
+            draw(config, data_gainer, logger, pred_result, test_Y,test_date)
+            #save_predict(config,pred_result,test_date)
+
+        if config.do_predict_all:
+            test_X, test_date = data_gainer.get_test_data(return_label_data=False,predict_all=True)
+            pred_result = predict(config, test_X)
+            pred_result=[np.argwhere(i==max(i))  for i in pred_result]
+            pred_result=np.squeeze(pred_result)
+            #draw(config, data_gainer, logger, pred_result, test_Y,test_date)
+            save_predict(config,pred_result,test_date)
     except Exception:
         logger.error("Run Error", exc_info=True)
-
 
 
 if __name__=="__main__":
