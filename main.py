@@ -18,8 +18,8 @@ class Config:
     feature_columns=[1,2,3,5,6]
     label_columns = [4]                  # 要预测的列 close
 
-    up_threshold=0.05
-    down_threshold=-0.05
+    up_threshold=0.07
+    down_threshold=-0.07
 
     predict_day = 10             # 预测未来几天
 
@@ -34,8 +34,8 @@ class Config:
     time_step = 40              # 用前多少天的数据来预测，也是LSTM的time step数
 
     # 训练参数
-    do_train = False
-    do_predict = True
+    do_train = True
+    do_predict = False
 
     #针对全数据预测
     do_predict_all=True
@@ -44,15 +44,15 @@ class Config:
     shuffle_train_data = True   # 是否对训练数据做shuffle
     use_cuda = True            # 是否使用GPU训练
 
-    train_data_rate = 0.9      # 训练数据占总体数据比例，测试数据就是 1-train_data_rate
-    valid_data_rate = 0.1      # 验证数据占训练数据比例，验证集在训练过程使用，为了做模型和参数选择
+    train_data_rate = 0.81      # 训练数据占总体数据比例，测试数据就是 1-train_data_rate
+    valid_data_rate = 0.19      # 验证数据占训练数据比例，验证集在训练过程使用，为了做模型和参数选择
 
-    predict_begin_rate=0        #设定哪些数据用于做最后的预测输出
+    predict_begin_rate=0.81        #设定哪些数据用于做最后的预测输出
     predict_end_rate=1
 
     batch_size = 64
     learning_rate = 0.001
-    epoch = 5                 # 整个训练集被训练多少遍，不考虑早停的前提下
+    epoch = 100                 # 整个训练集被训练多少遍，不考虑早停的前提下
     patience = 10                # 训练多少epoch，验证集没提升就停掉
     random_seed = 42           
 
@@ -153,9 +153,9 @@ class Data:
     
     def get_test_data(self, return_label_data=False,predict_all=False):
         if predict_all:
-            feature_data = self.x_data[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
-            label_data=self.y_data[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
-            date=self.date[self.data_num*self.config.predict_begin_rate:self.data_num*self.config.predict_end_rate]
+            feature_data = self.x_data[int(self.data_num*self.config.predict_begin_rate):int(self.data_num*self.config.predict_end_rate)]
+            label_data=self.y_data[int(self.data_num*self.config.predict_begin_rate):int(self.data_num*self.config.predict_end_rate)]
+            date=self.date[int(self.data_num*self.config.predict_begin_rate):int(self.data_num*self.config.predict_end_rate)]
         else:
             feature_data = self.x_data[self.train_num:]
             label_data=self.y_data[self.train_num:]
@@ -233,7 +233,7 @@ def draw(config: Config, origin_data: Data, logger, predict_data: np.ndarray, la
     plt.legend(loc='upper left')
 
     if config.do_figure_save:
-        plt.savefig(config.figure_save_path+"{}predict_{}_with_{}.png".format(config.continue_flag, label_name[i], config.used_frame))
+        plt.savefig(config.figure_save_path+"predict.png")
 
     plt.show()  
 
@@ -241,7 +241,7 @@ def save_predict(config:Config,predict_data: np.ndarray, date):
 
     df=pd.DataFrame(list(zip(date,predict_data)))
     df.columns=['date','predict']
-    df.to_csv(config.predict_file_save_path+'predict_data'+'.csv')
+    df.to_csv(config.predict_file_save_path+'predict_data_up{}'.format(config.up_threshold)+'.csv')
     print('predict result saved')
     
 
